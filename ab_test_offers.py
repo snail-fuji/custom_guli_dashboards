@@ -22,12 +22,9 @@ if __name__ == '__main__':
         n_days = st.selectbox("Retention Day", [3, 7, 14])
         platform = st.selectbox("Platform", ["All", "Android", "iOS"])
         country_group = st.selectbox("Country Group", ["All", "T0", "T1, T2"])
-        key_file = st.file_uploader('Google Cloud Key', type=['json'])
         submitted = st.form_submit_button("Extract")
 
-    key_info = json.load(key_file)
-
-    credentials = service_account.Credentials.from_service_account_info(key_info)
+    credentials = service_account.Credentials.from_service_account_info(st.secrets["google"])
 
     pd.read_gbq("""
     SELECT 'test'
