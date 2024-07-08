@@ -17,9 +17,19 @@ def highlight_values(val):
     color = cmap(norm(val))
     return f'background-color: rgb({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)})'
 
+def highlight_time_values(val):
+    cmap = plt.get_cmap('RdYlGn')  # Red to Green colormap
+    norm = mcolors.Normalize(vmin=-500, vmax=500)  # Normalize between 0 and 100
+    color = cmap(norm(-val))
+    return f'background-color: rgb({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)})'
+
+def get_height(df):
+    return (df.data.shape[0] + 1) * 35 + 3
+
 if __name__ == '__main__':
     with st.form("abtest"):
         n_days = st.selectbox("Retention Day", [3, 7, 14])
+        n_additional_offers = st.selectbox("Offers to compare", [5, 10, 20])
         platform = st.selectbox("Platform", ["All", "Android", "iOS"])
         country_group = st.selectbox("Country Group", ["All", "T0", "T1, T2"])
         submitted = st.form_submit_button("Extract")
@@ -82,7 +92,8 @@ if __name__ == '__main__':
         ) fp ON
             fp.UserId = io.UserId
             AND io.EventTime <= fp.FirstPaymentTime
-        WHERE EventName = 'ShowOffer'
+        WHERE EventName = 'ActivateOffer'
+            AND DATE(io.EventTime) >= '2024-06-07'
         GROUP BY 1, 2
     )
     SELECT *
@@ -90,8 +101,6 @@ if __name__ == '__main__':
     LEFT JOIN shows USING (UserId, IapId)
     WHERE RetentionDay BETWEEN 0 AND 14
     """)
-
-    offers_df['time_diff'] = (offers_df['ShowEventTime'] - offers_df['UserRegistrationTime']).dt.total_seconds()
 
     # Find popular offers
     target_offers = ['al.2x2startofer', 'al.5x2startofer', 'al.10x2startofer']
@@ -101,7 +110,7 @@ if __name__ == '__main__':
         (offers_df['IapNumber'] == 1) &\
         (offers_df['RetentionDay'] < n_days) &\
         (~offers_df['IapId'].isin(target_offers))
-    ]['IapId'].value_counts().index[0:10].tolist()
+    ]['IapId'].value_counts().index[0:n_additional_offers].tolist()
 
     def replaced_offer_name(offer):
         if offer in target_offers:
@@ -112,6 +121,8 @@ if __name__ == '__main__':
             
     offers_df['Offer'] = offers_df['IapId'].apply(replaced_offer_name)
 
+    # Revenue
+
     revenue_df = offers_df[
         (offers_df['IapNumber'] == 1) &\
         (offers_df['RetentionDay'] < n_days) &\
@@ -121,13 +132,15 @@ if __name__ == '__main__':
     revenue_comp_df = (revenue_df / revenue_df.sum() * 100).round(2).sort_values("0")
     revenue_comp_df['diff'] = revenue_comp_df["1"] - revenue_comp_df["0"]
 
-    def format_comp_df(comp_df, custom_format='{:.2f}%'):
-        return comp_df.rename(columns=rename_config).style.applymap(highlight_values, subset=['Difference']).format(custom_format)
+    def format_comp_df(comp_df, custom_format='{:.2f}%', highlight_func=highlight_values):
+        return comp_df.rename(columns=rename_config).style.applymap(highlight_func, subset=['Difference']).format(custom_format)
 
     revenue_comp_df = format_comp_df(revenue_comp_df)
 
     st.title("Revenue per offer, % from total")
-    st.dataframe(revenue_comp_df, height=500)
+    st.dataframe(revenue_comp_df, height=get_height(revenue_comp_df), use_container_width=True)
+
+    # Paying share
 
     inapps_df = offers_df[
         (offers_df['IapNumber'] == 1) &\
@@ -140,17 +153,46 @@ if __name__ == '__main__':
     inapps_comp_df = format_comp_df(inapps_comp_df)
 
     st.title("Paying share, %")
-    st.dataframe(inapps_comp_df, height=500)
+    st.dataframe(inapps_comp_df, height=get_height(inapps_comp_df), use_container_width=True)
 
-    time_df = offers_df[
+    # Payment time
+
+    offers_df['payment_time_diff'] = (offers_df['EventTime'] - offers_df['UserRegistrationTime']).dt.total_seconds()
+
+    payment_time_df = offers_df[
         (offers_df['IapNumber'] == 1) &\
         (offers_df['RetentionDay'] < n_days) &\
         (offers_df['MaxRetentionDay'] > n_days)
-    ].groupby(['ab_group', 'Offer'])['time_diff'].median().sort_values(ascending=False).unstack(0) / 60
+    ].groupby(['ab_group', 'Offer'])['payment_time_diff'].median().sort_values(ascending=False).unstack(0) / 3600
 
-    time_comp_df = time_df.round(0).loc[revenue_comp_df.index]
+    time_comp_df = payment_time_df.round(1).loc[revenue_comp_df.index]
     time_comp_df['diff'] = time_comp_df["1"] - time_comp_df["0"]
+    time_comp_df = format_comp_df(time_comp_df, custom_format='{:.1f} h', highlight_func=highlight_time_values)
+
+    st.title("Payment time, hours")
+    st.dataframe(time_comp_df, height=get_height(time_comp_df), use_container_width=True)
+
+    # First show time
+    offers_df['first_show_time_diff'] = (offers_df['ShowEventTime'] - offers_df['UserRegistrationTime']).dt.total_seconds()
+
+    first_show_time_df = offers_df[
+        (offers_df['IapNumber'] == 1) &\
+        (offers_df['RetentionDay'] < n_days) &\
+        (offers_df['MaxRetentionDay'] > n_days)
+    ].groupby(['ab_group', 'Offer'])['first_show_time_diff'].median().sort_values(ascending=False).unstack(0) / 3600
+
+    time_comp_df = first_show_time_df.round(0).loc[revenue_comp_df.index]
+    time_comp_df['diff'] = time_comp_df["1"] - time_comp_df["0"]
+    time_comp_df = format_comp_df(time_comp_df, custom_format='{:.0f} h', highlight_func=highlight_time_values)
 
     st.title("First show time, minutes")
-    st.text("Учтены только показы до первой покупки")
-    st.dataframe(time_comp_df.rename(columns=rename_config), height=500)
+    st.dataframe(time_comp_df, height=get_height(time_comp_df), use_container_width=True)
+
+    # Misc info
+    st.title("Offer prices")
+    st.dataframe(
+        offers_df.groupby('Offer')['IapUSDValue'].agg(['mean', 'median'])
+    )
+
+    # Probability of the first payment
+    
