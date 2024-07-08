@@ -1,0 +1,5 @@
+pandas==2.2.1
+pandas-gbq==0.22.0
+google-auth==2.29.0
+streamlit
+matplotlib
