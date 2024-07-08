@@ -4,12 +4,33 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import json
+from google.cloud import bigquery
 
 rename_config = {
     '0': 'Control',
     "1": 'Test',
     "diff": "Difference"
 }
+
+def get_query_size(query):
+    # Construct a BigQuery client object.
+    client = bigquery.Client(credentials=credentials)
+    
+    job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+    
+    # Start the query, passing in the extra configuration.
+    query_job = client.query(
+        query,
+        job_config=job_config,
+    )  # Make an API request.
+    
+    # A dry run query completes immediately.
+    st.markdown("This query will process {:.2f} gbytes.".format(query_job.total_bytes_processed / 1024 / 1024 / 1024))
+
+def run_bq_query(sql):
+    get_query_size(sql)
+
+    return pd.read_gbq(sql)
 
 def highlight_values(val):
     cmap = plt.get_cmap('RdYlGn')  # Red to Green colormap
@@ -19,7 +40,7 @@ def highlight_values(val):
 
 def highlight_time_values(val):
     cmap = plt.get_cmap('RdYlGn')  # Red to Green colormap
-    norm = mcolors.Normalize(vmin=-500, vmax=500)  # Normalize between 0 and 100
+    norm = mcolors.Normalize(vmin=-50, vmax=50)  # Normalize between 0 and 100
     color = cmap(norm(-val))
     return f'background-color: rgb({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)})'
 
@@ -28,9 +49,9 @@ def get_height(df):
 
 if __name__ == '__main__':
     with st.form("abtest"):
-        n_days = st.selectbox("Retention Day", [3, 7, 14])
-        n_additional_offers = st.selectbox("Offers to compare", [5, 10, 20])
-        platform = st.selectbox("Platform", ["All", "Android", "iOS"])
+        n_days = st.selectbox("Retention Day", [7, 3, 14])
+        n_additional_offers = st.selectbox("Offers to compare", [10, 5, 20])
+        platform = st.selectbox("Platform", ["Android", "iOS", "All"])
         country_group = st.selectbox("Country Group", ["All", "T0", "T1, T2"])
         submitted = st.form_submit_button("Extract")
 
@@ -40,7 +61,7 @@ if __name__ == '__main__':
     SELECT 'test'
     """, project_id='lonely-expeditions-275719', credentials=credentials)
 
-    offers_df = pd.read_gbq(f"""
+    offers_df = run_bq_query(f"""
     WITH users AS (
         SELECT u.*, f.ab_group
         FROM (
@@ -131,9 +152,18 @@ if __name__ == '__main__':
 
     revenue_comp_df = (revenue_df / revenue_df.sum() * 100).round(2).sort_values("0")
     revenue_comp_df['diff'] = revenue_comp_df["1"] - revenue_comp_df["0"]
+    revenue_comp_df = pd.merge(revenue_df, revenue_comp_df, left_index=True, right_index=True, suffixes=(" (Abs)", ""))
 
     def format_comp_df(comp_df, custom_format='{:.2f}%', highlight_func=highlight_values):
-        return comp_df.rename(columns=rename_config).style.applymap(highlight_func, subset=['Difference']).format(custom_format)
+        return comp_df.rename(
+            columns=rename_config
+        ).style.applymap(
+            highlight_func, 
+            subset=['Difference']
+        ).format('{:.2f}').format(
+            custom_format, 
+            subset=['Control', 'Test', 'Difference']
+        )
 
     revenue_comp_df = format_comp_df(revenue_comp_df)
 
@@ -150,6 +180,7 @@ if __name__ == '__main__':
 
     inapps_comp_df = (inapps_df / inapps_df.sum() * 100).round(2).loc[revenue_comp_df.index]
     inapps_comp_df['diff'] = inapps_comp_df["1"] - inapps_comp_df["0"]
+    inapps_comp_df = pd.merge(inapps_df, inapps_comp_df, left_index=True, right_index=True, suffixes=(" (Abs)", ""))
     inapps_comp_df = format_comp_df(inapps_comp_df)
 
     st.title("Paying share, %")
@@ -189,9 +220,14 @@ if __name__ == '__main__':
     st.dataframe(time_comp_df, height=get_height(time_comp_df), use_container_width=True)
 
     # Misc info
+    offer_prices_df = offers_df.groupby('Offer')['IapUSDValue'].agg(['mean', 'median']).rename(columns={
+        "mean": "Average",
+        "median": "Median"
+    }).round(2)
     st.title("Offer prices")
     st.dataframe(
-        offers_df.groupby('Offer')['IapUSDValue'].agg(['mean', 'median'])
+        offer_prices_df, height=get_height(revenue_comp_df),
+        use_container_width=True
     )
 
     # Probability of the first payment
