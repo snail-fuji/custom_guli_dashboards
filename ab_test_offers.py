@@ -62,6 +62,7 @@ if __name__ == '__main__':
     """, project_id='lonely-expeditions-275719', credentials=credentials)
 
     offers_df = run_bq_query(f"""
+    -- Query from Streamlit, ABTest, Offers
     WITH users AS (
         SELECT u.*, f.ab_group
         FROM (
